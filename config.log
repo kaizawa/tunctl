@@ -38,18 +38,17 @@ NumCPU = 2
 /bin/universe          = unknown
 
 PATH: /net/s1lab66/vmware/java/SunOS_i386/jdk1.6.0_20/bin
-PATH: /home/ka78231/tools/netbeans-6.7/bin
-PATH: /home/ka78231/tools/bin
-PATH: /home/ka78231/tools/SunOS_i386/bin
+PATH: /bin
 PATH: /usr/local/ant/bin
 PATH: /usr/local/bin
-PATH: /bin
 PATH: /usr/bin
 PATH: /sbin
 PATH: /usr/sbin
 PATH: /usr/bin
 PATH: /usr/lib
+PATH: /usr/ccs/bin
 PATH: /usr/sfw/bin
+PATH: /usr/jdk/instances/jdk1.6.0/bin
 PATH: /usr/local/sbin
 PATH: /usr/local/mozilla
 PATH: /usr/proc/bin
@@ -57,14 +56,8 @@ PATH: /usr/ccs/lib
 PATH: /opt/sfw/bin
 PATH: /usr/sfw/sbin
 PATH: /usr/sadm/bin
-PATH: /home/ka78231/script
-PATH: /home/ka78231/tools/script
-PATH: /home/ka78231/hadoop/bin
-PATH: /home/ka78231/tools/groovy-1.6.3/bin
-PATH: /home/ka78231/tools/grails-1.1.1/bin
 PATH: /opt/csw/bin
 PATH: /cores_data/local/bin
-PATH: /usr/dist
 PATH: /share/lang
 PATH: /usr/dt/bin
 PATH: /opt/SUNWdat/bin
@@ -77,20 +70,17 @@ PATH: /usr/apache/bin
 PATH: /usr/local/mysql/bin
 PATH: /usr/platform/sun4u/sbin
 PATH: /opt/SUNWspro/bin
-PATH: /support/local/bin
-PATH: /usr/dist/local/exe
-PATH: /usr/dist/exe
-PATH: /support/tsc_work1/group1/PKG/usr/local/bin
-PATH: /support/tsc_work1/group1/PKG/usr/local/SUNWfm/bin
 PATH: /usr/ucb
-PATH: /share/SUNWspro_teamware/bin/bringover
 PATH: /opt/onbld/bin/i386
 PATH: /share/cpr-local/share/sh
+PATH: /share/SUNWspro_teamware/bin/bringover
 PATH: /share/cpr-local/bin
 PATH: /share/onnv-tools/onbld/bin/sparc
 PATH: /share/onnv-tools/teamware/bin
-PATH: /net/jprt-web.sfbay.sun.com/jprt/dist/bin
 PATH: .
+PATH: /net/s1lab66/vmware/java/SunOS_i386/jdk1.6.0_20/bin
+PATH: /net/s1lab66/vmware/work/ka78231/hadoop/bin
+PATH: /net/s1lab66/vmware/scala/bin
 
 
 ## ----------- ##
