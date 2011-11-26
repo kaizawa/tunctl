@@ -63,12 +63,14 @@ Usage(char *name)
 int
 main(int argc, char **argv)
 {
-    int   tap_fd, opt, delete = 0, brief = 0, ip_fd, muxid = 0;
+    int   tap_fd, opt, delete = 0, brief = 0, ip_fd, ip_muxid = 0, arp_muxid = 0;
     char *tun = NULL, *file = NULL, *name = argv[0];
     char *ip_node = "/dev/ip", entry[30], backup[1024];
-    FILE *muxfp;
     int   ppa = 0, newppa = 0;
-    struct strioctl  strioc;    
+    struct strioctl  strioc;
+    int  is_tap = 0;
+    char *devname;
+    struct lifreq ifr;    
 
     while((opt = getopt(argc, argv, "bd:f:t:u:")) > 0){
         switch(opt) {
@@ -105,6 +107,14 @@ main(int argc, char **argv)
         Usage(name);
     }
 
+    devname = get_devname(tun);
+    if( strncmp(devname, "tap", 3) == 0){
+	is_tap = 1;
+    } else if ( strncmp(devname, "tun", 3) == 0){
+	is_tap = 0;
+    } else
+	Usage(name);
+    
     if(file == NULL){
         file = malloc(30);
         bzero(file, 30);      
@@ -116,71 +126,44 @@ main(int argc, char **argv)
         fprintf(stderr, "Can't open '%s'\n", file);
         exit(1);
     }
-  
+
     if(delete){
-        char    *p;
-        
         bzero(entry, 30);
         bzero(backup, 1024);
-    
-        if ((muxfp = fopen(MUXFILENAME, "r")) == NULL) {
-            perror("fopen");
-            fprintf(stderr,"Can't open %s\n", MUXFILENAME);
-            exit(0);
-        }
-      
-        /*
-         * Search entry of the interface for /tmp/tunclt.mid file.
-         */
-        while (fgets(entry, sizeof(entry), muxfp) != NULL){
-            if (strncmp(entry, tun, strlen(tun)) == 0){
-                p = strpbrk(entry, ":");                
-                muxid = atoi(p+1);
-            } else {
-                strcat(backup, entry);
-            }
-        }        
-        if (muxid == 0){
-            fprintf(stderr,"%s is not created.\n", tun );
-            fclose(muxfp);
-            exit(0);
-        }
-        fclose(muxfp);
 
-        if ((muxfp = fopen(MUXFILENAME, "w")) == NULL) {
-            perror("fopen");
-            fprintf(stderr,"Can't open %s\n", MUXFILENAME);
-            exit(1);
-        }
-        fputs(backup, muxfp);
-        fclose(muxfp);
-    
         if ((ip_fd = open(ip_node, O_RDWR)) < 0){
             perror("open");
             fprintf(stderr,"Can't open %s\n", ip_node);          
             exit(1);
         }    
 
-        if (ioctl (ip_fd, I_PUNLINK, muxid) < 0){
+        memset((void *)&ifr, 0x0, sizeof(struct lifreq));
+	strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
+	if (ioctl (ip_fd, SIOCGLIFMUXID, &ifr) < 0){
+	    perror("ioctl");
+	    fprintf(stderr, "Can't get muxid\n");
+	    exit(1);
+	}
+
+	if(is_tap) {
+	    /* just in case, unlink arp's stream */
+	    arp_muxid = ifr.lifr_arp_muxid;
+	    if (ioctl (ip_fd, I_PUNLINK, arp_muxid) < 0){
+		perror("ioctl(ignore error)");
+	    }
+	}
+        printf("ip_muxid=%d\n", ifr.lifr_ip_muxid);
+               
+	ip_muxid = ifr.lifr_ip_muxid;
+	if (ioctl (ip_fd, I_PUNLINK, ip_muxid) < 0){
             perror("ioctl");
             fprintf(stderr, "Can't unlink interface\n");
             exit(1);
         }
+	
         close (ip_fd);
       
-    } else{
-        /*
-         * Check /tmp/tunctl.mid to see if interface is already created.
-         */
-        if ((muxfp = fopen(MUXFILENAME, "r")) != NULL) {
-            while (fgets(entry, sizeof(entry), muxfp) != NULL){
-                if (strncmp(entry, tun, strlen(tun)) == 0){
-                    fprintf(stderr, "%s is already created.\n", tun);
-                    exit(0);
-                }
-            }
-            fclose(muxfp);
-        }
+    } else {
 
         /* Open ip device for persist link */
         if ((ip_fd = open (ip_node, O_RDWR, 0)) < 0){
@@ -205,20 +188,22 @@ main(int argc, char **argv)
             exit(1);
         }
 
-        if ((muxid = ioctl (ip_fd, I_PLINK, tap_fd)) < 0){
+        if ((ip_muxid = ioctl (ip_fd, I_PLINK, tap_fd)) < 0){
             perror("ioctl");
             fprintf (stderr, "Can't link %s device to IP\n", tun);
             exit(1);
         }
 
-        if ((muxfp = fopen(MUXFILENAME, "a")) == NULL) {
-            perror("fopen");
-            fprintf(stderr,"Can't open %s\n", MUXFILENAME);
-            exit(0);	
+        printf("%s ip_muxid=%d\n", tun, ip_muxid);
+        memset((void *)&ifr, 0x0, sizeof(struct lifreq));        
+	strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
+	ifr.lifr_ip_muxid  = ip_muxid;
+	if (ioctl (ip_fd, SIOCSLIFMUXID, &ifr) < 0){
+            perror("ioctl");
+            fprintf (stderr, "Can't set muxid of  %s device\n", tun);
+            exit(1);
         }
-        sprintf(entry, "%s:%d\n", tun, muxid);
-        fputs(entry, muxfp);
-        fclose(muxfp);
+        printf("Set ip_muxid=%d to %s\n", ip_muxid, tun);
 
         if(brief)
             printf("%s\n", tun);
