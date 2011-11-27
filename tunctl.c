@@ -141,7 +141,7 @@ main(int argc, char **argv)
     exit(0);
 }
 
-void      
+void
 add_if(int ip_fd, int tun_fd, char *tun, int brief){
     int ip_muxid = 0, newppa = 0, ppa = 0;
     struct lifreq ifr;
@@ -168,13 +168,14 @@ add_if(int ip_fd, int tun_fd, char *tun, int brief){
         exit(1);
     }
 
+    /* push ip module to the stream */
     if (ioctl(tun_fd, I_PUSH, "ip") < 0) {
         perror("ioctl");
         fprintf (stderr, "Can't push IP module to %s device\n", tun);
         exit(1);
     }
 
-    /* Assign ppa according to the unit number returned by tun device */
+    /* Set unit number to the device */
     if (ioctl (tun_fd, IF_UNITSEL, (char *) &ppa) < 0){
         perror("ioctl");
         fprintf (stderr, "Can't set unit number to %s device\n", tun);
@@ -220,7 +221,7 @@ delete_if(int ip_fd, int tun_fd, char *tun)
         /* just in case, unlink arp's stream */
         arp_muxid = ifr.lifr_arp_muxid;
         if (ioctl (ip_fd, I_PUNLINK, arp_muxid) < 0){
-            perror("ioctl(ignore error)");
+            /* ignore err */
         }
     }
                
