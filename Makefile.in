@@ -24,7 +24,7 @@ CFLAGS = -O2 -Wall -I.
 INSTALL = @INSTALL@
 
 exec_prefix = @prefix@
-BINDIR = @bindir@
+BINDIR = @sbindir@
 
 all: tunctl 
 
