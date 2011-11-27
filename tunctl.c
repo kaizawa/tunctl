@@ -45,11 +45,20 @@
 #ifndef TUNMAXPPA
 #define TUNMAXPPA	20
 #endif
-#define MUXFILENAME     "/tmp/tunctl.mid" /* store mux_id */
+#define IP_NODE "/dev/ip"
+#define NODE_LEN 30
 
-static int   get_ppa (char *);
+static int  get_ppa (char *);
 static char *get_devname (char *);
-static void  Usage(char *);
+static void Usage(char *);
+static void add_if(int, int, char *, int);
+static void delete_if(int, int, char *);
+
+typedef enum {
+    NOP = 0,
+    DELETE,
+    ADD
+} operation ;
 
 static void
 Usage(char *name)
@@ -63,14 +72,9 @@ Usage(char *name)
 int
 main(int argc, char **argv)
 {
-    int   tap_fd, opt, delete = 0, brief = 0, ip_fd, ip_muxid = 0, arp_muxid = 0;
-    char *tun = NULL, *file = NULL, *name = argv[0];
-    char *ip_node = "/dev/ip", entry[30], backup[1024];
-    int   ppa = 0, newppa = 0;
-    struct strioctl  strioc;
-    int  is_tap = 0;
-    char *devname;
-    struct lifreq ifr;    
+    char *tun = NULL, *node = NULL, *name = argv[0];
+    int opt, brief = 0, tun_fd, ip_fd;
+    operation op = NOP;
 
     while((opt = getopt(argc, argv, "bd:f:t:u:")) > 0){
         switch(opt) {
@@ -78,13 +82,14 @@ main(int argc, char **argv)
                 brief = 1;
                 break;
             case 'd':
-                delete = 1;
+                op = DELETE;
                 tun = optarg;
                 break;
             case 'f':
-                file = optarg;
+                node = optarg;
                 break;
             case 't':
+                op = ADD;
                 tun = optarg;
                 break;
             case 'h':
@@ -102,115 +107,129 @@ main(int argc, char **argv)
     if(tun == NULL)
         Usage(name);
 
-    if ((ppa = get_ppa(tun)) < 0){
-        fprintf(stderr, "Can't get instance number\n");
-        Usage(name);
+    if(node == NULL){
+        node = malloc(NODE_LEN);
+        bzero(node,NODE_LEN);      
+        snprintf(node, NODE_LEN, "/dev/%s", get_devname(tun));
     }
 
-    devname = get_devname(tun);
-    if( strncmp(devname, "tap", 3) == 0){
-	is_tap = 1;
-    } else if ( strncmp(devname, "tun", 3) == 0){
-	is_tap = 0;
-    } else
-	Usage(name);
-    
-    if(file == NULL){
-        file = malloc(30);
-        bzero(file, 30);      
-        sprintf(file, "/dev/%s", get_devname(tun));
-    }
-  
-    if((tap_fd = open(file, O_RDWR)) < 0){
+    if ((ip_fd = open(IP_NODE, O_RDWR)) < 0){
         perror("open");
-        fprintf(stderr, "Can't open '%s'\n", file);
+        fprintf(stderr,"Can't open %s\n", IP_NODE);          
+        exit(1);
+    }    
+
+    if((tun_fd = open(node, O_RDWR)) < 0){
+        perror("open");
+        fprintf(stderr, "Can't open '%s'\n", node);
         exit(1);
     }
 
-    if(delete){
-        bzero(entry, 30);
-        bzero(backup, 1024);
-
-        if ((ip_fd = open(ip_node, O_RDWR)) < 0){
-            perror("open");
-            fprintf(stderr,"Can't open %s\n", ip_node);          
-            exit(1);
-        }    
-
-        memset((void *)&ifr, 0x0, sizeof(struct lifreq));
-	strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
-	if (ioctl (ip_fd, SIOCGLIFMUXID, &ifr) < 0){
-	    perror("ioctl");
-	    fprintf(stderr, "Can't get muxid\n");
-	    exit(1);
-	}
-
-	if(is_tap) {
-	    /* just in case, unlink arp's stream */
-	    arp_muxid = ifr.lifr_arp_muxid;
-	    if (ioctl (ip_fd, I_PUNLINK, arp_muxid) < 0){
-		perror("ioctl(ignore error)");
-	    }
-	}
-        printf("ip_muxid=%d\n", ifr.lifr_ip_muxid);
-               
-	ip_muxid = ifr.lifr_ip_muxid;
-	if (ioctl (ip_fd, I_PUNLINK, ip_muxid) < 0){
-            perror("ioctl");
-            fprintf(stderr, "Can't unlink interface\n");
-            exit(1);
-        }
-	
-        close (ip_fd);
-      
-    } else {
-
-        /* Open ip device for persist link */
-        if ((ip_fd = open (ip_node, O_RDWR, 0)) < 0){
-            perror("open");                  
-            fprintf(stderr, "Can't open '%s'\n", ip_node);
-            exit(1);
-        }
-      
-        /* Assign a new PPA and get its unit number. */
-        strioc.ic_cmd = TUNNEWPPA;
-        strioc.ic_timout = 0;
-        strioc.ic_len = sizeof(ppa);
-        strioc.ic_dp = (char *)&ppa;
-        if ((newppa = ioctl (tap_fd, I_STR, &strioc)) < 0){
-            perror("ioctl");
-            fprintf(stderr, "Can't create %s\n", tun); 
-            exit(1);
-        }
-
-        if(newppa != ppa){
-            fprintf(stderr, "Can't create %s\n", tun);             
-            exit(1);
-        }
-
-        if ((ip_muxid = ioctl (ip_fd, I_PLINK, tap_fd)) < 0){
-            perror("ioctl");
-            fprintf (stderr, "Can't link %s device to IP\n", tun);
-            exit(1);
-        }
-
-        printf("%s ip_muxid=%d\n", tun, ip_muxid);
-        memset((void *)&ifr, 0x0, sizeof(struct lifreq));        
-	strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
-	ifr.lifr_ip_muxid  = ip_muxid;
-	if (ioctl (ip_fd, SIOCSLIFMUXID, &ifr) < 0){
-            perror("ioctl");
-            fprintf (stderr, "Can't set muxid of  %s device\n", tun);
-            exit(1);
-        }
-        printf("Set ip_muxid=%d to %s\n", ip_muxid, tun);
-
-        if(brief)
-            printf("%s\n", tun);
-        else
-            printf("Set '%s' persistent\n", tun);      
+    switch(op){
+        case(DELETE):
+            delete_if(ip_fd, tun_fd, tun);
+            break;
+        case(ADD):
+            add_if(ip_fd, tun_fd, tun, brief);
+            break;
+        default:
+            break;
     }
-    return(0);
+    close(ip_fd);
+    close(tun_fd);
+    
+    exit(0);
+}
+
+void      
+add_if(int ip_fd, int tun_fd, char *tun, int brief){
+    int ip_muxid = 0, newppa = 0, ppa = 0;
+    struct lifreq ifr;
+    struct strioctl  strioc;
+
+    if ((ppa = get_ppa(tun)) < 0){
+        fprintf(stderr, "Can't get instance number\n");
+        exit(1);
+    }
+    
+    /* Assign a new PPA and get its unit number. */
+    strioc.ic_cmd = TUNNEWPPA;
+    strioc.ic_timout = 0;
+    strioc.ic_len = sizeof(ppa);
+    strioc.ic_dp = (char *)&ppa;
+    if ((newppa = ioctl (tun_fd, I_STR, &strioc)) < 0){
+        perror("ioctl");
+        fprintf(stderr, "Can't create %s\n", tun); 
+        exit(1);
+    }
+
+    if(newppa != ppa){
+        fprintf(stderr, "Can't create %s\n", tun);             
+        exit(1);
+    }
+
+    if (ioctl(tun_fd, I_PUSH, "ip") < 0) {
+        perror("ioctl");
+        fprintf (stderr, "Can't push IP module to %s device\n", tun);
+        exit(1);
+    }
+
+    /* Assign ppa according to the unit number returned by tun device */
+    if (ioctl (tun_fd, IF_UNITSEL, (char *) &ppa) < 0){
+        perror("ioctl");
+        fprintf (stderr, "Can't set unit number to %s device\n", tun);
+        exit(1);
+    }
+
+    if ((ip_muxid = ioctl (ip_fd, I_PLINK, tun_fd)) < 0){
+        perror("ioctl");
+        fprintf (stderr, "Can't link %s device to IP\n", tun);
+        exit(1);
+    }
+
+    memset((void *)&ifr, 0x0, sizeof(struct lifreq));        
+    strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
+    ifr.lifr_ip_muxid  = ip_muxid;
+    if (ioctl (ip_fd, SIOCSLIFMUXID, &ifr) < 0){
+        perror("ioctl");
+        fprintf (stderr, "Can't set muxid of  %s device\n", tun);
+        exit(1);
+    }
+
+    if(brief)
+        printf("%s\n", tun);
+    else
+        printf("Set '%s' persistent\n", tun);      
+}
+    
+void
+delete_if(int ip_fd, int tun_fd, char *tun)
+{
+    int arp_muxid = 0, ip_muxid = 0;
+    struct lifreq ifr;
+
+    memset((void *)&ifr, 0x0, sizeof(struct lifreq));
+    strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
+    if (ioctl (ip_fd, SIOCGLIFMUXID, &ifr) < 0){
+        perror("ioctl");
+        fprintf(stderr, "Can't get muxid\n");
+        exit(1);
+    }
+
+    if( strncmp(tun, "tap", 3) == 0){
+        /* just in case, unlink arp's stream */
+        arp_muxid = ifr.lifr_arp_muxid;
+        if (ioctl (ip_fd, I_PUNLINK, arp_muxid) < 0){
+            perror("ioctl(ignore error)");
+        }
+    }
+               
+    ip_muxid = ifr.lifr_ip_muxid;
+    if (ioctl (ip_fd, I_PUNLINK, ip_muxid) < 0){
+        perror("ioctl");
+        fprintf(stderr, "Can't unlink interface\n");
+        exit(1);
+    }
 }
 
 int
