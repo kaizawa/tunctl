@@ -45,20 +45,27 @@
 #ifndef TUNMAXPPA
 #define TUNMAXPPA	20
 #endif
-#define IP_NODE "/dev/ip"
+#define IP_NODE "/dev/udp"
 #define NODE_LEN 30
-
-static int  get_ppa (char *);
-static char *get_devname (char *);
-static void Usage(char *);
-static void add_if(int, int, char *, int);
-static void delete_if(int, int, char *);
 
 typedef enum {
     NOP = 0,
     DELETE,
     ADD
-} operation ;
+} operation_t ;
+
+typedef enum {
+    TUN = 0,
+    TAP,
+    UNKNOWN
+} dev_type_t;
+
+static int  get_ppa (char *);
+static char* get_dev_node (char *);
+static void Usage(char *);
+static void add_if(int, int, char *, int, char *);
+static void delete_if(int, int, char *);
+static dev_type_t get_dev_type(char *); 
 
 static void
 Usage(char *name)
@@ -72,9 +79,11 @@ Usage(char *name)
 int
 main(int argc, char **argv)
 {
-    char *tun = NULL, *node = NULL, *name = argv[0];
-    int opt, brief = 0, tun_fd, ip_fd;
-    operation op = NOP;
+    char *tun = NULL;
+    char *dev_node = NULL;
+    char *name = argv[0];
+    int opt, brief = 0, if_fd, ip_fd;
+    operation_t op = NOP;
 
     while((opt = getopt(argc, argv, "bd:f:t:u:")) > 0){
         switch(opt) {
@@ -86,7 +95,7 @@ main(int argc, char **argv)
                 tun = optarg;
                 break;
             case 'f':
-                node = optarg;
+                dev_node = optarg;
                 break;
             case 't':
                 op = ADD;
@@ -107,11 +116,8 @@ main(int argc, char **argv)
     if(tun == NULL)
         Usage(name);
 
-    if(node == NULL){
-        node = malloc(NODE_LEN);
-        bzero(node,NODE_LEN);      
-        snprintf(node, NODE_LEN, "/dev/%s", get_devname(tun));
-    }
+    if(dev_node == NULL)
+        dev_node = get_dev_node(tun);
 
     if ((ip_fd = open(IP_NODE, O_RDWR)) < 0){
         perror("open");
@@ -119,33 +125,45 @@ main(int argc, char **argv)
         exit(1);
     }    
 
-    if((tun_fd = open(node, O_RDWR)) < 0){
+    if((if_fd = open(dev_node, O_RDWR)) < 0){
         perror("open");
-        fprintf(stderr, "Can't open '%s'\n", node);
+        fprintf(stderr, "Can't open '%s'\n", dev_node);
         exit(1);
     }
 
     switch(op){
         case(DELETE):
-            delete_if(ip_fd, tun_fd, tun);
+            delete_if(ip_fd, if_fd, tun);
             break;
         case(ADD):
-            add_if(ip_fd, tun_fd, tun, brief);
+            add_if(ip_fd, if_fd, tun, brief, dev_node);
             break;
         default:
             break;
     }
     close(ip_fd);
-    close(tun_fd);
+    close(if_fd);
     
     exit(0);
 }
 
 void
-add_if(int ip_fd, int tun_fd, char *tun, int brief){
-    int ip_muxid = 0, newppa = 0, ppa = 0;
+add_if(int ip_fd, int if_fd, char *tun, int brief, char *dev_node){
+    int arp_fd;
+    int ip_muxid = 0;
+    int arp_muxid = 0;
+    int newppa = 0;
+    int ppa = 0;
     struct lifreq ifr;
-    struct strioctl  strioc;
+    struct strioctl  strioc, strioc_if;
+    dev_type_t type;
+    
+    memset(&ifr, 0, sizeof(struct lifreq));
+
+    if((type = get_dev_type(tun)) == UNKNOWN){
+        fprintf(stderr, "Unknown device name: %s\n" , tun);
+        exit(1);
+    }
 
     if ((ppa = get_ppa(tun)) < 0){
         fprintf(stderr, "Can't get instance number\n");
@@ -157,7 +175,7 @@ add_if(int ip_fd, int tun_fd, char *tun, int brief){
     strioc.ic_timout = 0;
     strioc.ic_len = sizeof(ppa);
     strioc.ic_dp = (char *)&ppa;
-    if ((newppa = ioctl (tun_fd, I_STR, &strioc)) < 0){
+    if ((newppa = ioctl (if_fd, I_STR, &strioc)) < 0){
         perror("ioctl");
         fprintf(stderr, "Can't create %s\n", tun); 
         exit(1);
@@ -169,28 +187,100 @@ add_if(int ip_fd, int tun_fd, char *tun, int brief){
     }
 
     /* push ip module to the stream */
-    if (ioctl(tun_fd, I_PUSH, "ip") < 0) {
+    if (ioctl(if_fd, I_PUSH, "ip") < 0) {
         perror("ioctl");
-        fprintf (stderr, "Can't push IP module to %s device\n", tun);
+        fprintf (stderr, "Can't push ip module to %s device\n", tun);
         exit(1);
     }
 
-    /* Set unit number to the device */
-    if (ioctl (tun_fd, IF_UNITSEL, (char *) &ppa) < 0){
+    if(type == TUN)
+    {
+        /* set unit number to the device */
+        if (ioctl (if_fd, IF_UNITSEL, (char *) &ppa) < 0){
+            perror("ioctl");
+            fprintf (stderr, "Can't set unit number to %s device\n", tun);
+            exit(1);
+        }
+    }
+
+    if(type == TAP)
+    {
+        if (ioctl(if_fd, SIOCGLIFFLAGS, &ifr) < 0){
+            fprintf (stderr, "Can't get flags\n");
+            exit(1);
+        }
+        strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
+        ifr.lifr_ppa = ppa;
+        /* assign ppa according to the unit number returned by tun device */
+        if (ioctl (if_fd, SIOCSLIFNAME, &ifr) < 0){
+            fprintf (stderr, "Can't set PPA %d\n", ppa);
+            exit(1);
+        }
+        if (ioctl(if_fd, SIOCGLIFFLAGS, &ifr) <0) {
+            fprintf (stderr, "Can't get flags\n");
+            exit(1);
+        }
+
+        /* push arp module to the device stream */
+        if (ioctl(if_fd, I_PUSH, "arp") < 0) {
+            perror("ioctl");
+            fprintf (stderr, "Can't push ARP module to device stream\n");
+            exit(1);
+        }
+
+        /* push arp module to the ip stream */
+        if (ioctl(ip_fd, I_PUSH, "arp") < 0) {
+            perror("ioctl");
+            fprintf (stderr, "Can't push ARP module to ip stream\n");	
+            exit(1);
+        }
+
+        /* open arp fd */
+        if((arp_fd = open(dev_node, O_RDWR)) < 0){
+            perror("open");
+            fprintf(stderr, "Can't open '%s'\n", dev_node);
+            exit(1);
+        }
+        /* push arp module to the stream */
+        if (ioctl(arp_fd, I_PUSH, "arp") < 0) {
+            perror("ioctl");
+            fprintf (stderr, "Can't push ARP module to arp stream\n");
+            exit(1);
+        }
+
+        /* set ifname to arp */
+        strioc_if.ic_cmd = SIOCSLIFNAME;
+        strioc_if.ic_timout = 0;
+        strioc_if.ic_len = sizeof(ifr);
+        strioc_if.ic_dp = (char *)&ifr;
+	/* set interface name to arp stream */
+        if (ioctl(arp_fd, I_STR, &strioc_if) < 0){
+            fprintf (stderr, "Can't set ifname to arp stream\n");
+            exit(1);
+        }
+    }
+
+    /* link interface stream to ip stream */
+    if ((ip_muxid = ioctl (ip_fd, I_PLINK, if_fd)) < 0){
         perror("ioctl");
-        fprintf (stderr, "Can't set unit number to %s device\n", tun);
+        fprintf (stderr, "Can't link %s device to ip\n", tun);
         exit(1);
     }
 
-    if ((ip_muxid = ioctl (ip_fd, I_PLINK, tun_fd)) < 0){
-        perror("ioctl");
-        fprintf (stderr, "Can't link %s device to IP\n", tun);
-        exit(1);
+    if(type == TAP){
+        if ((arp_muxid = ioctl (ip_fd, I_PLINK, arp_fd)) < 0){
+            perror("ioctl");
+            fprintf (stderr, "Can't link %s device to ARP\n", tun);
+            exit(1);
+        }
     }
 
     memset((void *)&ifr, 0x0, sizeof(struct lifreq));        
     strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
     ifr.lifr_ip_muxid  = ip_muxid;
+    if(type == TAP){
+        ifr.lifr_arp_muxid  = arp_muxid;
+    }
     if (ioctl (ip_fd, SIOCSLIFMUXID, &ifr) < 0){
         perror("ioctl");
         fprintf (stderr, "Can't set muxid of  %s device\n", tun);
@@ -204,20 +294,33 @@ add_if(int ip_fd, int tun_fd, char *tun, int brief){
 }
     
 void
-delete_if(int ip_fd, int tun_fd, char *tun)
+delete_if(int ip_fd, int if_fd, char *tun)
 {
     int arp_muxid = 0, ip_muxid = 0;
     struct lifreq ifr;
+    dev_type_t type;
+
+    if((type = get_dev_type(tun)) == UNKNOWN){
+        fprintf(stderr, "Unknown device name: %s\n" , tun);
+        exit(1);
+    }
 
     memset((void *)&ifr, 0x0, sizeof(struct lifreq));
     strncpy (ifr.lifr_name, tun, sizeof (ifr.lifr_name));
+
+    if (ioctl (ip_fd, SIOCGLIFFLAGS, &ifr) < 0){
+        perror("ioctl");
+        fprintf(stderr, "Can't get flag\n");
+        exit(1);
+    }
+
     if (ioctl (ip_fd, SIOCGLIFMUXID, &ifr) < 0){
         perror("ioctl");
         fprintf(stderr, "Can't get muxid\n");
         exit(1);
     }
 
-    if( strncmp(tun, "tap", 3) == 0){
+    if(type == TAP){
         /* just in case, unlink arp's stream */
         arp_muxid = ifr.lifr_arp_muxid;
         if (ioctl (ip_fd, I_PUNLINK, arp_muxid) < 0){
@@ -266,18 +369,36 @@ get_ppa (char *interface)
 }
 
 char *
-get_devname (char *interface)
+get_dev_node (char *interface)
 {
-      char *instance;
-      char *devname = NULL;
-      int   i;
+    char *instance;
+    char devname[NODE_LEN]; 
+    int   i;
+    char *dev_node;
+    bzero(devname, NODE_LEN);
       
-      for ( i = 0 ; i < TUNMAXPPA ; i++){
-          if ((instance = strpbrk(interface, "0123456789")) == NULL)
-              continue;
-          devname = malloc(30);
-          bzero(devname, 30);
-          strncpy(devname, interface, instance - interface);
+    for ( i = 0 ; i < TUNMAXPPA ; i++){
+      if ((instance = strpbrk(interface, "0123456789")) == NULL)
+	continue;
+      strncpy(devname, interface, instance - interface);
+    }
+    dev_node = malloc(NODE_LEN);
+    bzero(dev_node, NODE_LEN);      
+    snprintf(dev_node, NODE_LEN, "/dev/%s", devname);
+    return dev_node;
+}
+
+dev_type_t 
+get_dev_type (char *interface)
+{
+      dev_type_t type;
+
+      if(strncmp("tun", interface, 3) == 0){
+          type = TUN;
+      } else if (strncmp("tap", interface, 3) == 0){
+          type = TAP;
+      } else {
+          type = UNKNOWN;
       }
-      return(devname);
+      return type;
 }
